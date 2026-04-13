@@ -1,0 +1,106 @@
+network_name: nuw0wa_camb_PK
+path: nuw0wa_camb_PK
+
+# CosmoPower package prescription for generating a matter power spectrum
+# emulator in the nuw0waCDM model.  This YAML is derived from the
+# unified nuw0wa_camb_package.yaml but trimmed down to contain only
+# the linear matter power spectrum network.  We increase the size of
+# the training sample to 2×10^5 to account for the extra degrees of
+# freedom (mnu, w0, wa) compared to ΛCDM【953001340072815†L526-L532】.
+
+emulated_code:
+  name: camb
+  version: '1.5.0'
+  inputs: [ombh2, omch2, As, ns, H0, mnu, w0, wa, z_pk, N_eff]
+  extra_args:
+    lens_potential_accuracy: 8
+    kmax: 100.0
+    k_per_logint: 130
+    lens_margin: 2050
+    AccuracyBoost: 1.0
+    lAccuracyBoost: 1.2
+    lSampleBoost: 1.0
+    DoLateRadTruncation: false
+    min_l_logl_sampling: 6000
+    recombination_model: CosmoRec
+    dark_energy_model: ppf
+    halofit_version: mead2020_feedback
+    num_massive_neutrinos: 1
+    neutrino_hierarchy: degenerate
+    nnu: 3.044
+    CMB_unit: muK
+    raw_cl: false
+
+samples:
+  # Increase the number of training samples to handle the larger
+  # nine‑dimensional parameter space for Pk.  See the discussion in
+  # the paper recommending ~10^5 samples for ΛCDM and ~1.2×10^5 for
+  # models with one or two extra parameters【953001340072815†L526-L532】.
+  Ntraining: 200000
+
+generator:
+  seed: 240507903
+  n_shards: 20  # more shards improve parallelism for a larger data set
+  dtype: float32
+  compression: gzip
+  internal_transfer_nz: 256
+  sigma8_integration:
+    kmin: 1.0e-4
+    kmax: 50.0
+    nk: 600
+
+parameters:
+  ombh2: [0.015, 0.030]
+  omch2: [0.090, 0.150]
+  logA: [2.5, 3.5]
+  ns: [0.85, 1.05]
+  h: [0.4, 1.0]
+  mnu: [0.0, 0.5]
+  w0: [-2.0, 0.0]
+  wa: [-2.0, 2.0]
+  # Redshift at which to evaluate P(k).  Training data are drawn
+  # uniformly from this interval.
+  z_pk: [0.0, 5.0]
+
+  # Derived CAMB parameters and constants.  The As parameter is
+  # constructed from logA and used by CAMB.  H0 is derived from h.
+  H0: 'lambda h: h * 100.0'
+  As: 'lambda logA: 1.0e-10 * np.exp(logA)'
+  N_eff: 3.044
+
+  # Scalar outputs included in the dataset for convenience.  They are
+  # produced by CAMB but have no network associated in this file.
+  thetastar:
+  sigma8_0:
+  zstar:
+  rstar:
+  zdrag:
+  rdrag:
+  YHe:
+  zrei:
+
+training_defaults: &training_defaults
+  validation_split: 0.1
+  learning_rates: [1.0e-2, 1.0e-3, 1.0e-4, 1.0e-5, 1.0e-6, 1.0e-7]
+  batch_sizes: [1000, 2000, 5000, 10000, 20000, 50000]
+  gradient_accumulation_steps: [1, 1, 1, 1, 1, 1]
+  patience_values: [100, 100, 100, 100, 100, 100]
+  max_epochs: [1000, 1000, 1000, 1000, 1000, 1000]
+
+hidden_512x4: &hidden_512x4
+  n_hidden: [512, 512, 512, 512]
+
+networks:
+  # Linear matter power spectrum Pk(k,z).  The emulator is trained
+  # directly on log10(P(k,z)) for numerical stability.  We exclude
+  # non‑linear boosts and CMB spectra from this package.
+  - quantity: 'Pk/lin'
+    inputs: [ombh2, omch2, logA, ns, h, mnu, w0, wa, z_pk]
+    type: NN
+    log: true
+    modes:
+      label: k_h
+      range: [1.0e-4, 50.0]
+      n_modes: 500
+    n_traits: *hidden_512x4
+    training: *training_defaults
