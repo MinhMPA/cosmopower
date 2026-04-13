@@ -1,0 +1,204 @@
+network_name: mpa_2026_camb_nuw0waCDM
+path: mpa_2026_camb_nuw0waCDM
+
+# Paper-style metadata for a CosmoPower package. The extra generator block is
+# consumed by the standalone dataset builder in generate_nuw0wa_training_data.py.
+emulated_code:
+  name: camb
+  version: '1.5.0'
+  # The paper example uses CosmoRec. Keep this if your CAMB build exposes it.
+  # If your CAMB install does not include CosmoRec, change to Recfast explicitly.
+  inputs: [ombh2, omch2, As, ns, H0, tau, mnu, w0, wa, z_pk, logT_AGN, N_eff]
+  extra_args:
+    lens_potential_accuracy: 8
+    kmax: 100.0
+    k_per_logint: 130
+    lens_margin: 2050
+    AccuracyBoost: 1.0
+    lAccuracyBoost: 1.2
+    lSampleBoost: 1.0
+    DoLateRadTruncation: false
+    min_l_logl_sampling: 6000
+    recombination_model: CosmoRec
+    dark_energy_model: ppf
+    halofit_version: mead2020_feedback
+    num_massive_neutrinos: 1
+    neutrino_hierarchy: degenerate
+    nnu: 3.044
+    CMB_unit: muK
+    raw_cl: false
+
+samples:
+  # Extended models in the paper use 1.2e5 training samples.
+  Ntraining: 120000
+
+generator:
+  seed: 240507903
+  n_shards: 10
+  dtype: float32
+  compression: gzip
+  internal_transfer_nz: 256
+  sigma8_integration:
+    kmin: 1.0e-4
+    kmax: 50.0
+    nk: 600
+
+# tau here is the reionization optical depth tau_reio from Table 2.
+parameters:
+  ombh2: [0.015, 0.030]
+  omch2: [0.090, 0.150]
+  logA: [2.5, 3.5]
+  tau: [0.02, 0.20]
+  ns: [0.85, 1.05]
+  h: [0.4, 1.0]
+  mnu: [0.0, 0.5]
+  w0: [-2.0, 0.0]
+  wa: [-2.0, 2.0]
+  z_pk: [0.0, 5.0]
+  logT_AGN: [7.3, 8.3]
+
+  H0: 'lambda h: h * 100.0'
+  As: 'lambda logA: 1.0e-10 * np.exp(logA)'
+  N_eff: 3.044
+
+  # Scalar CAMB outputs that are convenient to keep alongside the spectra.
+  thetastar:
+  sigma8_0:
+  zstar:
+  rstar:
+  zdrag:
+  rdrag:
+  YHe:
+  zrei:
+
+training_defaults: &training_defaults
+  validation_split: 0.1
+  learning_rates: [1.0e-2, 1.0e-3, 1.0e-4, 1.0e-5, 1.0e-6, 1.0e-7]
+  batch_sizes: [1000, 2000, 5000, 10000, 20000, 50000]
+  gradient_accumulation_steps: [1, 1, 1, 1, 1, 1]
+  patience_values: [100, 100, 100, 100, 100, 100]
+  max_epochs: [1000, 1000, 1000, 1000, 1000, 1000]
+
+hidden_512x4: &hidden_512x4
+  n_hidden: [512, 512, 512, 512]
+
+networks:
+  - quantity: 'derived'
+    outputs: [thetastar, sigma8_0, zstar, rstar, zdrag, rdrag, YHe, zrei]
+    inputs: [ombh2, omch2, logA, tau, ns, h, mnu, w0, wa]
+    type: NN
+    n_traits: *hidden_512x4
+    training: *training_defaults
+
+  - quantity: 'Cl/tt'
+    inputs: [ombh2, omch2, logA, tau, ns, h, mnu, w0, wa]
+    type: NN
+    log: true
+    modes:
+      label: l
+      range: [2, 10000]
+    n_traits: *hidden_512x4
+    training: *training_defaults
+
+  - quantity: 'Cl/te'
+    inputs: [ombh2, omch2, logA, tau, ns, h, mnu, w0, wa]
+    type: PCAplusNN
+    modes:
+      label: l
+      range: [2, 10000]
+    p_traits:
+      n_pcas: 512
+      n_batches: 10
+    n_traits: *hidden_512x4
+    training: *training_defaults
+
+  - quantity: 'Cl/ee'
+    inputs: [ombh2, omch2, logA, tau, ns, h, mnu, w0, wa]
+    type: NN
+    log: true
+    modes:
+      label: l
+      range: [2, 10000]
+    n_traits: *hidden_512x4
+    training: *training_defaults
+
+  - quantity: 'Cl/bb'
+    inputs: [ombh2, omch2, logA, tau, ns, h, mnu, w0, wa]
+    type: NN
+    log: true
+    modes:
+      label: l
+      range: [2, 10000]
+    n_traits: *hidden_512x4
+    training: *training_defaults
+
+  - quantity: 'Cl/pp'
+    # The paper excludes tau_reio from the lensing-potential emulator inputs.
+    inputs: [ombh2, omch2, logA, ns, h, mnu, w0, wa]
+    type: PCAplusNN
+    log: true
+    modes:
+      label: l
+      range: [2, 10000]
+    p_traits:
+      n_pcas: 64
+      n_batches: 10
+    n_traits: *hidden_512x4
+    training: *training_defaults
+
+  - quantity: 'Pk/lin'
+    inputs: [ombh2, omch2, logA, ns, h, mnu, w0, wa, z_pk]
+    type: NN
+    log: true
+    modes:
+      label: k_h
+      range: [1.0e-4, 50.0]
+      n_modes: 500
+    n_traits: *hidden_512x4
+    training: *training_defaults
+
+  - quantity: 'Pk/nlboost'
+    # This follows the paper prescription: emulate P_nl / P_lin - 1, not P_nl itself.
+    inputs: [ombh2, omch2, logA, ns, h, mnu, w0, wa, z_pk, logT_AGN]
+    type: NN
+    log: false
+    modes:
+      label: k_h
+      range: [1.0e-4, 50.0]
+      n_modes: 500
+    n_traits: *hidden_512x4
+    training: *training_defaults
+
+  - quantity: 'Hubble'
+    inputs: [ombh2, omch2, h, mnu, w0, wa]
+    type: NN
+    log: true
+    modes:
+      label: z
+      range: [0.0, 20.0]
+      n_modes: 5000
+    n_traits: *hidden_512x4
+    training: *training_defaults
+
+  - quantity: 'DA'
+    inputs: [ombh2, omch2, h, mnu, w0, wa]
+    type: NN
+    # D_A(z=0)=0, so keep this one in linear rather than log space.
+    log: false
+    modes:
+      label: z
+      range: [0.0, 20.0]
+      n_modes: 5000
+    n_traits: *hidden_512x4
+    training: *training_defaults
+
+  - quantity: 'sigma8'
+    inputs: [ombh2, omch2, logA, ns, h, mnu, w0, wa]
+    type: NN
+    log: true
+    modes:
+      label: z
+      range: [0.0, 20.0]
+      n_modes: 5000
+    n_traits: *hidden_512x4
+    training: *training_defaults
